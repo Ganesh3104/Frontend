@@ -1,0 +1,36 @@
+/* animate.css - custom for Home page */
+
+/* Base animation class */
+.animate__animated {
+  animation-duration: 1s;
+  animation-fill-mode: both;
+}
+
+/* Fade in from bottom to top */
+@keyframes fadeInUp {
+  0% {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate__fadeInUp {
+  animation-name: fadeInUp;
+}
+
+/* Speed variants */
+.animate__faster {
+  animation-duration: 0.5s;
+}
+
+.animate__fast {
+  animation-duration: 0.8s;
+}
+
+.animate__slow {
+  animation-duration: 1.5s;
+}
