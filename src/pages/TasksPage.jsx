@@ -33,27 +33,21 @@ export default function TasksPage({ BASE, token, profile, users, loadingUsers })
 
   // can the current user edit the given task?
   const canEditTask = (task) => {
-    // admins/managers/hr can edit any task
     if (isAdminOrManager(profile?.role)) return true;
 
-    // employees/interns can edit only if they are the assignee
     if (isEmployeeOrIntern(profile?.role)) {
       if (!task) return false;
 
       const assignee = task.assigned_to ?? task.assigned_to_id ?? task.assigned_to_user ?? null;
 
-      // assigned_to may be an object (user), id number, string id, or email
       if (assignee && typeof assignee === "object") {
         const aid = assignee.id ?? assignee.pk ?? assignee.user_id ?? assignee.uid;
         if (aid != null && profile?.id != null) return String(aid) === String(profile.id);
       } else if (assignee != null) {
-        // primitive id or string -- compare with profile.id or profile.user_id
         if (profile?.id != null && String(assignee) === String(profile.id)) return true;
         if (profile?.user_id != null && String(assignee) === String(profile.user_id)) return true;
-        // sometimes assigned_to could be username/email - not checked here
       }
 
-      // also try fields that may contain assignee email/name
       if (task.assigned_to_name && profile) {
         const nameLower = String(task.assigned_to_name).toLowerCase();
         const myName = (profile.full_name || `${profile.first_name || ""} ${profile.last_name || ""}` || profile.email || "").toLowerCase();
@@ -63,7 +57,6 @@ export default function TasksPage({ BASE, token, profile, users, loadingUsers })
       return false;
     }
 
-    // default deny
     return false;
   };
 
@@ -163,7 +156,6 @@ export default function TasksPage({ BASE, token, profile, users, loadingUsers })
   };
 
   const startEditTask = (task) => {
-    // permission check before allowing edit UI
     if (!canEditTask(task)) {
       alert("You are not authorized to edit this task.");
       return;
@@ -244,21 +236,53 @@ export default function TasksPage({ BASE, token, profile, users, loadingUsers })
     }
   };
 
-  const getTaskCounts = (tasksArr) => {
-    const counts = { active: 0, completed: 0, pending: 0, overdue: 0 };
+  // ---------------------------
+  // Robust counting logic: use same filters as UI
+  // ---------------------------
+
+  // normalize status string safely
+  const normalizeStatus = (status) => {
+    if (status == null) return "";
+    return String(status).trim().toLowerCase().replace(/\s+/g, " ").replace(/_/g, " ").trim();
+  };
+
+  // helper: returns true if task matches the UI's filter for a category
+  const matchesCategory = (task, key) => {
     const now = new Date();
-    tasksArr.forEach((t) => {
-      const s = (t.status || "").toLowerCase();
-      const isCompleted = s === "completed" || s === "done";
-      const isPending = ["todo", "pending", "to_do"].includes(s);
-      const isActive = ["in_progress", "in progress", "active"].includes(s);
-      const isOverdue = Boolean(t.is_overdue || t.overdue) || (t.due_date && new Date(t.due_date) < now && !isCompleted);
-      if (isCompleted) counts.completed += 1;
-      else if (isOverdue) counts.overdue += 1;
-      else if (isPending) counts.pending += 1;
-      else if (isActive) counts.active += 1;
-      else counts.active += 1;
-    });
+    const s = normalizeStatus(task?.status || "");
+    const isCompleted = s === "completed" || s === "done";
+    const isPending = ["todo", "pending", "to do", "to_do"].includes(s);
+    const isActive = ["in progress", "in_progress", "inprogress", "active"].includes(s);
+    // determine overdue robustly
+    let isOverdue = false;
+    if (task?.is_overdue || task?.overdue) isOverdue = true;
+    else if (task?.due_date) {
+      const parsed = Date.parse(task.due_date);
+      if (!isNaN(parsed) && parsed < now.getTime() && !isCompleted) isOverdue = true;
+    }
+
+    if (key === "active") {
+      return isActive || (!isCompleted && !isPending && !isOverdue && s !== "");
+    }
+    if (key === "completed") {
+      return isCompleted;
+    }
+    if (key === "pending") {
+      return isPending;
+    }
+    if (key === "overdue") {
+      return isOverdue;
+    }
+    return false;
+  };
+
+  const getTaskCounts = (tasksArr) => {
+    const keys = ["active", "completed", "pending", "overdue"];
+    const counts = { active: 0, completed: 0, pending: 0, overdue: 0 };
+    if (!Array.isArray(tasksArr)) return counts;
+    for (const k of keys) {
+      counts[k] = tasksArr.filter((t) => matchesCategory(t, k)).length;
+    }
     return counts;
   };
 
@@ -451,11 +475,9 @@ export default function TasksPage({ BASE, token, profile, users, loadingUsers })
                     <span className="badge bg-secondary me-1 text-capitalize">{task.status}</span>
                     <span className="badge bg-primary me-2 text-capitalize">{task.priority}</span>
                   </div>
-                  {/* show Edit if allowed by permission helper */}
                   {canEditTask(task) && (
                     <div>
                       <button className="btn btn-sm btn-outline-primary me-1" onClick={() => startEditTask(task)}>Edit</button>
-                      {/* Delete still restricted to admin/manager */}
                       {isAdminOrManager(profile?.role) && (
                         <button className="btn btn-sm btn-outline-danger" onClick={() => deleteTask(task.id)}>Delete</button>
                       )}
