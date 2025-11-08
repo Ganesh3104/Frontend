@@ -1,3 +1,4 @@
+// src/pages/Dashboard.jsx
 import React, { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
@@ -6,6 +7,7 @@ import AnnouncementsPage from "./AnnouncementsPage";
 import LeaveDashboard from "./LeaveDashboard";
 import AttendancePage from "./AttendancePage";
 import ChatPage from "./ChatPage"; // <-- Chat tab import
+import DeviceSessionManagement from "../components/DeviceSessionManager";
 
 export default function Dashboard() {
   const { getProfile } = useAuth();
@@ -43,9 +45,9 @@ export default function Dashboard() {
   const loadUsers = async () => {
     setLoadingUsers(true);
     const candidates = [
+      "/api/auth/users/",           // Correct endpoint - try first
       "/api/dashboard/users/",
       "/api/users/",
-      "/api/auth/users/",
       "/api/accounts/users/",
       "/api/v1/users/",
     ].map((p) => (p.startsWith("http") ? p : `${BASE}${p}`));
@@ -192,7 +194,7 @@ export default function Dashboard() {
                   <div className="text-muted">Loading latest announcement...</div>
                 </div>
               ) : latestAnnouncement ? (
-                <div className="card p-4 shadow-sm">
+                <div className="card p-4 shadow-sm mb-4">
                   <div className="d-flex justify-content-between align-items-start mb-2">
                     <div>
                       <h5 className="mb-1">{latestAnnouncement.title}</h5>
@@ -224,13 +226,16 @@ export default function Dashboard() {
                   )}
                 </div>
               ) : (
-                <div className="card p-4 shadow-sm border-0">
+                <div className="card p-4 shadow-sm border-0 mb-4">
                   <h5>Glad to have you back, {profile?.first_name || profile?.full_name || "User"}!</h5>
                   <p className="text-muted mb-0">
                     Use the sidebar to view Announcements, Tasks, Attendance, Leave, or Chat.
                   </p>
                 </div>
               )}
+
+              {/* DeviceSessionManagement displayed at the bottom of Overview */}
+              <DeviceSessionManagement BASE={BASE} token={token} />
             </div>
           )}
 

@@ -1,378 +1,288 @@
-// src/pages/Dashboard.jsx
+// src/components/DeviceSessionManager.jsx
 import React, { useEffect, useState } from "react";
-import { useAuth } from "../context/AuthContext";
 
-/**
- * Dashboard.jsx
- * - Supports all roles (Admin, Manager, HR, Employee, Intern)
- * - Admin & Manager can create/update/delete tasks & announcements
- * - Dynamic summary cards and task list by status
- * - Shows BOTH overall Day4 leave_summary (from /api/dashboard/summary/)
- *   and per-user leave balances (from /api/dashboard/leave-balance/)
- *   — visible to all roles (admin & employees)
- */
+const API_BASE = "http://localhost:8000/api/auth";
 
-export default function Dashboard() {
-  const { user, getProfile } = useAuth();
-  const [profile, setProfile] = useState(null);
+export default function DeviceSessionManager() {
+  const [devices, setDevices] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [activeTab, setActiveTab] = useState("devices");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const [activeTab, setActiveTab] = useState("overview");
-  const [loading, setLoading] = useState(true);
+  const getAccessToken = () => localStorage.getItem("access_token");
 
-  const [tasks, setTasks] = useState([]);
-  const [announcements, setAnnouncements] = useState([]);
-  const [leaveBalance, setLeaveBalance] = useState(null);
-  const [summary, setSummary] = useState(null); // for /api/dashboard/summary/
-
-  const [taskFilter, setTaskFilter] = useState(null);
-
-  // create form toggles & state
-  const [showCreateTask, setShowCreateTask] = useState(false);
-  const [creatingTask, setCreatingTask] = useState(false);
-  const [taskForm, setTaskForm] = useState({
-    title: "",
-    description: "",
-    status: "todo",
-    priority: "medium",
-    assigned_to: "",
-    due_date: "",
-  });
-  const [taskFieldErrors, setTaskFieldErrors] = useState({});
-
-  const [users, setUsers] = useState(null);
-  const [loadingUsers, setLoadingUsers] = useState(false);
-
-  const [showCreateAnn, setShowCreateAnn] = useState(false);
-  const [creatingAnn, setCreatingAnn] = useState(false);
-  const [annForm, setAnnForm] = useState({
-    title: "",
-    content: "",
-    priority: "medium",
-    expires_at: "",
-  });
-
-  const [editingTaskId, setEditingTaskId] = useState(null);
-  const [editingTask, setEditingTask] = useState(null);
-  const [editingTaskSaving, setEditingTaskSaving] = useState(false);
-
-  const [editingAnnId, setEditingAnnId] = useState(null);
-  const [editingAnn, setEditingAnn] = useState(null);
-  const [editingAnnSaving, setEditingAnnSaving] = useState(false);
-
-  const token = localStorage.getItem("access_token");
-
-  const isDay4User = (role) => {
-    if (!role) return false;
-    const r = String(role).toLowerCase();
-    return r === "employee" || r === "intern";
-  };
-
-  const isAdminOrManager = (role) => {
-    if (!role) return false;
-    const r = String(role).toLowerCase();
-    return r === "admin" || r === "manager" || r === "hr";
-  };
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const p = await getProfile();
-        setProfile(p || null);
-        await loadDashboardData();
-        await loadUsers(); // non-blocking
-      } catch (err) {
-        console.error("Failed to load profile/dashboard", err);
-        setLoading(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const loadDashboardData = async () => {
-    setLoading(true);
+  const refreshAccessToken = async () => {
+    const refresh = localStorage.getItem("refresh_token");
+    if (!refresh) return null;
     try {
-      const [summaryRes, tasksRes, annRes, leaveRes] = await Promise.all([
-        // Day 4 summary (contains leave_summary & other overall metrics)
-        fetch("http://localhost:8000/api/dashboard/summary/", { headers: { Authorization: `Bearer ${token}` } })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
+      const res = await fetch(`${API_BASE}/token/refresh/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.access) localStorage.setItem("access_token", data.access);
+      return data.access || null;
+    } catch (err) {
+      console.error("refresh token error", err);
+      return null;
+    }
+  };
 
-        fetch("http://localhost:8000/api/dashboard/tasks/", { headers: { Authorization: `Bearer ${token}` } })
-          .then((r) => (r.ok ? r.json() : []))
-          .catch(() => []),
+  const authFetch = async (url, opts = {}) => {
+    let token = getAccessToken();
+    opts.headers = opts.headers || {};
+    if (!opts.headers["Content-Type"]) opts.headers["Content-Type"] = "application/json";
+    if (token) opts.headers["Authorization"] = `Bearer ${token}`;
 
-        fetch("http://localhost:8000/api/dashboard/announcements/", { headers: { Authorization: `Bearer ${token}` } })
-          .then((r) => (r.ok ? r.json() : []))
-          .catch(() => []),
+    let res;
+    try {
+      res = await fetch(url, opts);
+    } catch (err) {
+      console.error("Network error", err);
+      return null;
+    }
 
-        fetch("http://localhost:8000/api/dashboard/leave-balance/", { headers: { Authorization: `Bearer ${token}` } })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null),
-      ]);
+    if (res.status === 401) {
+      const newAccess = await refreshAccessToken();
+      if (newAccess) {
+        opts.headers["Authorization"] = `Bearer ${newAccess}`;
+        try {
+          res = await fetch(url, opts);
+        } catch (err) {
+          console.error("Network error after refresh", err);
+          return null;
+        }
+      } else {
+        window.location.href = "/login";
+        return null;
+      }
+    }
 
-      const tasksArray = Array.isArray(tasksRes) ? tasksRes : tasksRes?.results ?? [];
-      const announcementsArray = Array.isArray(annRes) ? annRes : annRes?.results ?? [];
+    if (!res) return null;
+    if (res.status === 204) return { ok: true };
+    const json = await res.json().catch(() => null);
+    if (!res.ok) throw json || new Error("Request failed");
+    return json;
+  };
 
-      setSummary(summaryRes ?? null);
-      setTasks(tasksArray);
-      setAnnouncements(announcementsArray);
-      setLeaveBalance(leaveRes ?? null);
-    } catch (error) {
-      console.error("Error loading dashboard data:", error);
+  const loadDevices = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await authFetch(`${API_BASE}/devices/`, { method: "GET" });
+      setDevices((data && (data.devices || data.results || data)) || []);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load devices");
     } finally {
       setLoading(false);
     }
   };
 
-  // try multiple endpoints for users dropdown
-  const loadUsers = async () => {
-    setLoadingUsers(true);
-    const candidates = [
-      "/api/users/",
-      "/api/auth/users/",
-      "/api/dashboard/users/",
-      "/api/accounts/users/",
-      "/api/v1/users/",
-    ].map((p) => (p.startsWith("http") ? p : `http://localhost:8000${p}`));
-
-    for (const url of candidates) {
-      try {
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) continue;
-        const data = await res.json();
-        const arr = Array.isArray(data) ? data : data?.results ?? null;
-        if (Array.isArray(arr) && arr.length > 0) {
-          const normalized = arr
-            .map((u) => ({
-              id: u.id ?? u.pk ?? u.user_id ?? u.uid,
-              display:
-                u.full_name ||
-                u.email ||
-                u.username ||
-                (u.first_name && `${u.first_name} ${u.last_name}`) ||
-                String(u.id ?? u.pk ?? u.user_id ?? ""),
-              raw: u,
-            }))
-            .filter((u) => u.id != null);
-          if (normalized.length) {
-            setUsers(normalized);
-            setLoadingUsers(false);
-            return;
-          }
-        }
-      } catch (e) {
-        // ignore & continue
-      }
+  const loadSessions = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await authFetch(`${API_BASE}/sessions/`, { method: "GET" });
+      setSessions((data && (data.sessions || data.results || data)) || []);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load sessions");
+    } finally {
+      setLoading(false);
     }
-
-    setUsers(null);
-    setLoadingUsers(false);
   };
 
-  const safeToFixed = (value) => (value == null || Number.isNaN(Number(value)) ? "0.0" : Number(value).toFixed(1));
+  useEffect(() => {
+    loadDevices();
+    loadSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  if (loading) return <div className="text-center mt-5">Loading dashboard...</div>;
-  if (!profile) return <div className="text-center mt-5">No profile found.</div>;
-
-  // Compute task counts
-  const getTaskCounts = (tasksArr) => {
-    const counts = { active: 0, completed: 0, pending: 0, overdue: 0 };
-    const now = new Date();
-
-    tasksArr.forEach((t) => {
-      const s = (t.status || "").toLowerCase();
-      const isCompleted = s === "completed" || s === "done";
-      const isPending = ["todo", "pending", "to_do"].includes(s);
-      const isActive = ["in_progress", "in progress", "active"].includes(s);
-      const isOverdue = Boolean(t.is_overdue || t.overdue) || (t.due_date && new Date(t.due_date) < now && !isCompleted);
-
-      if (isCompleted) counts.completed += 1;
-      else if (isOverdue) counts.overdue += 1;
-      else if (isPending) counts.pending += 1;
-      else if (isActive) counts.active += 1;
-      else counts.active += 1;
-    });
-
-    return counts;
+  const handleTrust = async (deviceId, trust) => {
+    try {
+      await authFetch(`${API_BASE}/devices/trust/`, {
+        method: "POST",
+        body: JSON.stringify({ device_id: deviceId, trust }),
+      });
+      await loadDevices();
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Failed to change trust status");
+    }
   };
 
-  const taskCounts = getTaskCounts(tasks);
+  const handleRemove = async (deviceId) => {
+    if (!window.confirm("Remove this device? All sessions from it will be logged out.")) return;
+    try {
+      await authFetch(`${API_BASE}/devices/${deviceId}/`, { method: "DELETE" });
+      await loadDevices();
+      await loadSessions();
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Failed to remove device");
+    }
+  };
 
-  const taskCategories = [
-    { label: "Active Tasks", key: "active", count: taskCounts.active, color: "primary" },
-    { label: "Completed", key: "completed", count: taskCounts.completed, color: "success" },
-    { label: "Pending", key: "pending", count: taskCounts.pending, color: "warning" },
-    { label: "Overdue", key: "overdue", count: taskCounts.overdue, color: "danger" },
-  ];
+  const handleLogoutSession = async (sessionId) => {
+    if (!window.confirm("Logout this session?")) return;
+    try {
+      await authFetch(`${API_BASE}/sessions/${sessionId}/logout/`, { method: "POST" });
+      await loadSessions();
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Failed to logout session");
+    }
+  };
 
-  // Create/announce/edit/delete handlers left unchanged (reused from previous file)...
-  // (For brevity here I assume you keep the same code for createTask/createAnnouncement/edit/delete)
-  // ---- you already have those handlers in your file; no change required for leave display.
+  const handleLogoutAll = async () => {
+    if (!window.confirm("Logout from all other devices?")) return;
+    try {
+      const res = await authFetch(`${API_BASE}/sessions/logout-all/`, { method: "POST" });
+      if (res && res.message) window.alert(res.message);
+      await loadSessions();
+    } catch (err) {
+      console.error(err);
+      alert(err?.message || "Failed to logout other sessions");
+    }
+  };
 
-  // For clarity we'll reuse the create/edit/delete implementations you already have.
-  // (If you want, I can paste the full file with handlers again — but since you asked only
-  // to show both admin & employee leave data, below I only adjust the rendering.)
+  const deviceIcon = (type) => {
+    if (type === "mobile" || type === "tablet") return "📱";
+    return "💻";
+  };
 
   return (
-    <div className="container mt-4">
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h1 className="text-primary">Welcome, {profile?.first_name || profile?.full_name || "User"}!</h1>
-        <span className={`badge rounded-pill ${profile?.is_email_verified ? "bg-success" : "bg-warning"} text-dark`}>
-          {profile?.is_email_verified ? "Verified" : "Not Verified"} | Role: {profile?.role || "N/A"}
-        </span>
+    <div className="container my-4">
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h3 className="m-0">Device & Session Manager</h3>
+        <div>
+          <div className="btn-group" role="group" aria-label="tabs">
+            <button
+              type="button"
+              className={`btn btn-sm ${activeTab === "devices" ? "btn-dark" : "btn-outline-secondary"}`}
+              onClick={() => setActiveTab("devices")}
+            >
+              Devices
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${activeTab === "sessions" ? "btn-dark" : "btn-outline-secondary"}`}
+              onClick={() => setActiveTab("sessions")}
+            >
+              Sessions
+            </button>
+          </div>
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="btn-group mb-3" role="group">
-        {["overview", "tasks", "announcements", "leave"].map((tab) => (
-          <button
-            key={tab}
-            className={`btn btn-sm ${activeTab === tab ? "btn-dark" : "btn-outline-secondary"}`}
-            onClick={() => {
-              setActiveTab(tab);
-              if (tab === "tasks") setTaskFilter(null);
-            }}
-          >
-            {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            {tab === "tasks" ? ` (${taskCounts.active})` : ""}
-          </button>
-        ))}
-      </div>
+      {loading && <div className="mb-2 text-muted">Loading...</div>}
+      {error && <div className="mb-2 text-danger">{error}</div>}
 
-      <hr />
-
-      {/* Overview */}
-      {activeTab === "overview" && (
-        <div className="row mb-4 g-3">
-          {taskCategories.map((item) => (
-            <div key={item.key} className="col-md-3" onClick={() => { setActiveTab("tasks"); setTaskFilter(item.key); }} style={{ cursor: "pointer" }}>
-              <div className={`card text-center shadow-sm rounded-4 py-3`} style={{ transition: "transform 0.2s, box-shadow 0.2s", opacity: 0.98 }}>
-                <div className="card-body">
-                  <h6 className="card-title">{item.label}</h6>
-                  <p className={`card-text fs-4 fw-bold text-${item.color}`}>{item.count ?? 0}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Tasks (unchanged rendering) */}
-      {activeTab === "tasks" && (
+      {activeTab === "devices" && (
         <div>
-          {/* ...your existing create/edit task UI and list... */}
-          {/* (I assume you keep the implementation from your last working file.) */}
-          {/* For brevity the tasks UI is unchanged here. */}
-        </div>
-      )}
-
-      {/* Announcements (unchanged) */}
-      {activeTab === "announcements" && (
-        <div>
-          {/* ...your existing announcements UI... */}
-        </div>
-      )}
-
-      {/* === LEAVE: show BOTH overall summary (summary.leave_summary) AND per-user leaveBalance === */}
-      {activeTab === "leave" && (
-        <div>
-          <h3>Leave</h3>
-
-          {/* 1) Overall Day4 summary from /api/dashboard/summary/ (if available) */}
-          {summary?.leave_summary ? (
-            <div className="card mb-3 shadow-sm rounded-4 p-3">
-              <div className="row align-items-center">
-                <div className="col-md-8">
-                  <h5>Overall Leave Summary (Organization)</h5>
-                  <p className="mb-1">
-                    Allocated: <strong>{summary.leave_summary.total_allocated}</strong> days &nbsp;·&nbsp;
-                    Used: <strong>{summary.leave_summary.total_used}</strong> days &nbsp;·&nbsp;
-                    Remaining: <strong>{summary.leave_summary.total_remaining}</strong> days
-                  </p>
-                  <div className="progress" style={{ height: "18px" }}>
-                    <div
-                      className="progress-bar"
-                      role="progressbar"
-                      style={{ width: `${summary.leave_summary.usage_percentage ?? 0}%` }}
-                      aria-valuenow={summary.leave_summary.usage_percentage ?? 0}
-                      aria-valuemin="0"
-                      aria-valuemax="100"
-                    >
-                      {safeToFixed(summary.leave_summary.usage_percentage)}%
-                    </div>
-                  </div>
-                </div>
-                <div className="col-md-4 text-end">
-                  <small className="text-muted">Source: /api/dashboard/summary/</small>
-                </div>
-              </div>
+          <div className="d-flex justify-content-between align-items-center mb-2">
+            <h5 className="mb-0">Your Devices ({devices.length})</h5>
+            <div>
+              <button className="btn btn-sm btn-link me-2" onClick={loadDevices}>
+                Refresh
+              </button>
             </div>
-          ) : null}
-
-          {/* 2) Current user's per-type leave balances (existing leaveBalance) */}
-          <div className="card mb-3 shadow-sm rounded-4 p-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <h5>Your Leave Balances</h5>
-              <small className="text-muted">Source: /api/dashboard/leave-balance/</small>
-            </div>
-
-            {leaveBalance?.leave_balances?.length ? (
-              <div className="row g-3">
-                {leaveBalance.leave_balances.map((leave) => (
-                  <div key={leave.id} className="col-md-4">
-                    <div className="card shadow-sm rounded-4">
-                      <div className="card-body">
-                        <h6>{leave.leave_type_display}</h6>
-                        <p className="mb-1">
-                          Remaining: <strong>{leave.remaining_days}</strong> / {leave.total_days} days
-                        </p>
-                        <div className="progress">
-                          <div className="progress-bar" style={{ width: `${leave.usage_percentage ?? 0}%` }}>
-                            {safeToFixed(leave.usage_percentage)}%
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="alert alert-secondary">No personal leave information found.</div>
-            )}
           </div>
 
-          {/* 3) If user is admin/manager/hr, and summary contains no per-user list,
-              we try to show any organization-level per-type breakdown from summary
-              (some backends include array of leave balances in summary; show if present) */}
-          {isAdminOrManager(profile?.role) && summary?.leave_balances && Array.isArray(summary.leave_balances) && (
-            <div className="card mb-3 shadow-sm rounded-4 p-3">
-              <div className="d-flex justify-content-between align-items-center mb-2">
-                <h5>Organization Leave Breakdown</h5>
-                <small className="text-muted">From summary.leave_balances</small>
+          <div className="row g-3">
+            {devices.length === 0 && (
+              <div className="col-12">
+                <div className="alert alert-secondary mb-0">No devices found.</div>
               </div>
+            )}
 
-              <div className="row g-3">
-                {summary.leave_balances.map((lv) => (
-                  <div key={lv.id ?? lv.leave_type} className="col-md-4">
-                    <div className="card shadow-sm rounded-4">
-                      <div className="card-body">
-                        <h6>{lv.leave_type_display ?? lv.leave_type}</h6>
-                        <p className="mb-1">
-                          Remaining: <strong>{lv.remaining_days ?? lv.total_days - (lv.used_days ?? 0)}</strong> / {lv.total_days} days
-                        </p>
-                        <div className="progress">
-                          <div className="progress-bar" style={{ width: `${lv.usage_percentage ?? 0}%` }}>
-                            {safeToFixed(lv.usage_percentage)}
-                            %
-                          </div>
+            {devices.map((d) => (
+              <div key={d.id} className="col-12">
+                <div className="card shadow-sm">
+                  <div className="card-body d-flex justify-content-between align-items-center">
+                    <div className="d-flex align-items-center">
+                      <div style={{ fontSize: 22 }} className="me-3">
+                        {deviceIcon(d.device_type)}
+                      </div>
+                      <div>
+                        <div className="fw-semibold">{d.device_name}</div>
+                        <div className="text-muted small">
+                          {d.browser} • {d.os}
+                        </div>
+                        <div className="text-muted small">
+                          Last used: {d.last_used ? new Date(d.last_used).toLocaleString() : "—"}
                         </div>
                       </div>
                     </div>
+
+                    <div className="d-flex align-items-center">
+                      {d.is_trusted && <span className="badge bg-success me-2">Trusted</span>}
+                      <button className="btn btn-sm btn-outline-primary me-2" onClick={() => handleTrust(d.id, !d.is_trusted)}>
+                        {d.is_trusted ? "Untrust" : "Trust"}
+                      </button>
+                      <button className="btn btn-sm btn-outline-danger" onClick={() => handleRemove(d.id)}>
+                        Remove
+                      </button>
+                    </div>
                   </div>
-                ))}
+                </div>
               </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "sessions" && (
+        <div>
+          <div className="d-flex justify-content-between align-items-center mb-2">
+            <h5 className="mb-0">Active Sessions ({sessions.length})</h5>
+            <div>
+              <button className="btn btn-sm btn-link me-2" onClick={loadSessions}>
+                Refresh
+              </button>
+              <button className="btn btn-sm btn-warning" onClick={handleLogoutAll}>
+                Logout All Other Sessions
+              </button>
             </div>
-          )}
+          </div>
+
+          <div className="row g-3">
+            {sessions.length === 0 && (
+              <div className="col-12">
+                <div className="alert alert-secondary mb-0">No active sessions.</div>
+              </div>
+            )}
+
+            {sessions.map((s) => (
+              <div key={s.id || `${s.ip_address}-${s.login_at}`} className="col-12">
+                <div className={`card ${s.is_current ? "border-primary shadow-sm" : ""}`}>
+                  <div className="card-body d-flex justify-content-between align-items-center">
+                    <div>
+                      <div className="fw-semibold">
+                        {s.device} {s.is_current && <span className="badge bg-primary ms-2">YOU</span>}
+                      </div>
+                      <div className="text-muted small">
+                        IP: {s.ip_address || "—"}{s.location ? ` • ${s.location}` : ""}
+                      </div>
+                      <div className="text-muted small">Login: {s.login_at ? new Date(s.login_at).toLocaleString() : "—"}</div>
+                    </div>
+
+                    <div>
+                      {!s.is_current && (
+                        <button className="btn btn-sm btn-outline-danger" onClick={() => handleLogoutSession(s.id)}>
+                          Logout
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
